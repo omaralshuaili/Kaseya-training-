@@ -17,6 +17,9 @@ const employeesSchema = new mongoose.Schema({
     skillLevel: { 
     type: mongoose.Schema.Types.ObjectId, ref: 'SkillLevel' 
     },
+    active:{
+        type:Boolean
+    }
 })
 
 
