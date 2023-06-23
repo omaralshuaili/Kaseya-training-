@@ -5,7 +5,7 @@ module.exports.authenticateJWT =  function(req, res, next) {
     if (token) {
       jwt.verify(token, process.env.JWT_SECRET_KEY, (err, user) => {
         if (err) {
-          return res.sendStatus(403);
+          return res.sendStatus(401);
         }
         req.user = user;
         next();
