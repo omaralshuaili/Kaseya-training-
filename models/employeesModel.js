@@ -14,11 +14,14 @@ const employeesSchema = new mongoose.Schema({
     email:{
         type:String
     },
-    skillLevel: { 
+    skillLevel: [{ 
     type: mongoose.Schema.Types.ObjectId, ref: 'SkillLevel' 
-    },
+    }],
     active:{
         type:Boolean
+    },
+    age:{
+        type:Number
     }
 })
 

@@ -5,13 +5,16 @@ const cors = require("cors");
 const https = require("https");
 const mongoose = require("mongoose");
 const fs = require("fs");
+const cookieParser = require('cookie-parser')
 
 const authRoute = require('./routes/auth')
 const employeesRoute = require('./routes/employees')
 
+const skillRoute = require('./routes/skill')
 
 
 app.use(express.urlencoded({ extended: false })); //Parse URL-encoded bodies
+app.use(cookieParser())
 
 const corsOptions = {
   origin: "https://localhost:4200",
@@ -25,6 +28,7 @@ app.use(express.urlencoded({ extended: false })); //Parse URL-encoded bodies
 app.use(cors(corsOptions));
 app.use('/api/Authenticate',authRoute)
 app.use('/api/Employees',employeesRoute)
+app.use('/api/skills',skillRoute)
 try {
   mongoose.connect("mongodb://127.0.0.1:27017/listingsDB", {
     useNewUrlParser: true,
