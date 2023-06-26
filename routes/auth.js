@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-const crypto = require('crypto');
+const crypto = require("crypto");
 
 const { sendResponse } = require("../helpers/responseHandler");
 const { validateUser } = require("../helpers/validations");
@@ -119,7 +119,7 @@ async function createRefreshToken(user) {
 
   // Save the refresh token to the database
   const refreshToken = jwt.sign(payload, secret, { ...options, jwtid: jwtid });
-
+  console.log("this is the 1st one :" + jwtid);
   // Update the refreshToken array of the user
   await RefreshTokens.findOneAndUpdate(
     { jwtid: jwtid },
@@ -154,8 +154,6 @@ async function createRefreshTokenWithJwtid(token) {
   return refreshToken;
 }
 
-
-
 function generateJti() {
   return uuidv4();
 }
@@ -170,9 +168,13 @@ router.post("/refresh-token", async (req, res) => {
 
   try {
     // Verify and decode the refresh token
-    const decodedToken = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, {
-      ignoreExpiration: true, // Allow expired tokens for revocation check
-    });
+    const decodedToken = jwt.verify(
+      refreshToken,
+      process.env.REFRESH_TOKEN_SECRET,
+      {
+        ignoreExpiration: true, // Allow expired tokens for revocation check
+      }
+    );
 
     // Check if the refresh token is revoked
     const tokenRevoked = await isRefreshTokenRevoked(decodedToken.jwtid);
@@ -181,37 +183,34 @@ router.post("/refresh-token", async (req, res) => {
       return sendResponse(res, 400, "Refresh token has been revoked.");
     }
 
-      
     // Generate a new access token
     const accessToken = await createAccessToken(decodedToken);
 
+    const mostRecentToken = await findMostRecentRefreshTokenByJWTID(
+      decodedToken.jti
+    );
+    console.log("---------------------------------------");
+    console.log(mostRecentToken);
+    console.log("---------------------------------------");
+    console.log(refreshToken);
+    console.log("---------------------------------------");
 
-      const mostRecentToken = await findMostRecentRefreshTokenByJWTID(decodedToken.jti);
-console.log("---------------------------------------")
-      console.log(mostRecentToken)
-      console.log("---------------------------------------")
-      console.log(refreshToken)
-      console.log("---------------------------------------")
-      
-    console.log(mostRecentToken === refreshToken)
-      if (mostRecentToken != refreshToken) {
-        return sendResponse(res, 401, "Refresh token has been compromised.");
-      }
+    console.log(mostRecentToken === refreshToken);
+    if (mostRecentToken != refreshToken) {
+      return sendResponse(res, 401, "Refresh token has been compromised.");
+    }
 
-      // Generate a new refresh token and update the corresponding entry in the database
-      const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
+    // Generate a new refresh token and update the corresponding entry in the database
+    const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
 
-      await updateRefreshToken(decodedToken.jti, newRefreshToken);
+    await updateRefreshToken(decodedToken.jti, newRefreshToken);
 
-
-
-      // Set the new refresh token in the response cookie
-      res.cookie("refreshToken", newRefreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-      });
-    
+    // Set the new refresh token in the response cookie
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+    });
 
     // Send the response with the new access token
     sendResponse(res, 200, "Token refreshed successfully.", {
@@ -223,19 +222,19 @@ console.log("---------------------------------------")
   }
 });
 
-
 async function isRefreshTokenRevoked(jwtid) {
   // Check if the refresh token (identified by jti) exists in the database
-  const refreshToken = await RefreshTokens.findOne({ jwtid });
+  const refreshToken = await RefreshTokens.findOne({ jwtid: jwtid });
+  console.log("is revoked " + refreshToken)
   if (refreshToken) {
+    console.log("is revoked " + refreshToken.revoked)
     return refreshToken.revoked;
   }
   return false;
 }
 
-
 async function updateRefreshToken(jwtid, newRefreshToken) {
-  console.log(jwtid, newRefreshToken)
+  console.log(jwtid);
   try {
     // Find the refresh token by its jwtid and push the new refresh token to the refreshToken array
     await RefreshTokens.findOneAndUpdate(
@@ -244,28 +243,24 @@ async function updateRefreshToken(jwtid, newRefreshToken) {
     );
   } catch (err) {
     // Handle any errors that occur during the database update
-    console.log(err)
+    console.log(err);
   }
 }
 
-async function findMostRecentRefreshTokenByJWTID(jwtid) {
-  // Query the database to find the document containing the most recent refresh token
-  const refreshTokenDoc = await RefreshTokens.findOne({ jwtid })
-    .sort({ createdAt: -1 })
-    .exec();
-
-  // If the document exists and has a non-empty refreshToken array, return the most recent token
-  if (refreshTokenDoc && refreshTokenDoc.refreshToken.length > 0) {
-    const mostRecentToken = refreshTokenDoc.refreshToken[0];
-    return mostRecentToken;
+async function findMostRecentRefreshTokenByJWTID() {
+  try {
+    const doc = await RefreshTokens.findOne({}, { refreshToken: { $slice: -1 } }).exec();
+    if (doc && doc.refreshToken && doc.refreshToken.length > 0) {
+      const lastRefreshToken = doc.refreshToken[0];
+      console.log("this should be the last refresh token : " + lastRefreshToken)
+      return lastRefreshToken;
+    }
+  } catch (err) {
+    // Handle the error
+    console.error(err);
   }
-
-  return null; // Return null if no matching document or empty refreshToken array
+  return null
+  
 }
-
-
-
-
-
 
 module.exports = router;
