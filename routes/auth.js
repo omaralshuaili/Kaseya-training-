@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-const crypto = require('crypto');
+const crypto = require("crypto");
 
 const { sendResponse } = require("../helpers/responseHandler");
 const { validateUser } = require("../helpers/validations");
@@ -12,8 +12,9 @@ const { RefreshTokens } = require("../models/refreshTokenModel");
 const { v4: uuidv4 } = require("uuid");
 
 router.post("/login", async (req, res) => {
+  console.log(req.body)
   try {
-    if (!req.body.Username || !req.body.Password) {
+    if (!req.body.Username || !req.body.Password || !req.body) {
       return sendResponse(res, 400, "Please fill in all the fields.");
     }
 
@@ -22,7 +23,7 @@ router.post("/login", async (req, res) => {
       return sendResponse(res, 400, error.details[0].message);
     }
 
-    const user = await Users.findOne({ userName: req.body.userName });
+    const user = await Users.findOne({ Username: req.body.Username });
     if (!user) {
       return sendResponse(res, 400, "Invalid email or password.");
     }
@@ -53,8 +54,8 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error(err);
-    sendResponse(res, 500, "Server Error");
+    console.log(err);
+    sendResponse(res, 500, err);
   }
 });
 
@@ -62,11 +63,12 @@ router.post("/register", async (req, res) => {
   try {
     // Validation before adding users
     const { error } = validateUser(req.body);
-    if (error) return sendResponse(res, 401, error.details[0].message);
+    if (error) return sendResponse(res, 400, error.details[0].message);
 
     // Check if email already exists
     const userNameExists = await Users.findOne({ Username: req.body.Username });
-    if (userNameExists) return sendResponse(res, 401, "Email already exists.");
+    console.log(userNameExists)
+    if (userNameExists) return sendResponse(res, 400, "Email already exists.");
 
     // Hash the password
     const salt = await bcrypt.genSalt(10);
@@ -82,15 +84,15 @@ router.post("/register", async (req, res) => {
     await user.save();
     sendResponse(res, 201, "Thanks for registering with us.");
   } catch (err) {
-    console.error(err);
-    sendResponse(res, 500, "Server Error");
+    console.log(err);
+    sendResponse(res, 500, err);
   }
 });
 
 function createAccessToken(user) {
   const payload = {
     _id: user._id,
-    userName: user.userName,
+    userName: user.Username,
   };
 
   const options = {
@@ -105,7 +107,7 @@ function createAccessToken(user) {
 async function createRefreshToken(user) {
   const payload = {
     _id: user._id,
-    userName: user.userName,
+    userName: user.Username,
   };
 
   const options = {
@@ -119,7 +121,7 @@ async function createRefreshToken(user) {
 
   // Save the refresh token to the database
   const refreshToken = jwt.sign(payload, secret, { ...options, jwtid: jwtid });
-
+  console.log("this is the 1st one :" + jwtid);
   // Update the refreshToken array of the user
   await RefreshTokens.findOneAndUpdate(
     { jwtid: jwtid },
@@ -134,7 +136,7 @@ async function createRefreshTokenWithJwtid(token) {
   const secret = process.env.REFRESH_TOKEN_SECRET;
 
   // Generate a random component for the refresh token
-  const randomComponent = crypto.randomBytes(16).toString("hex");
+  const randomComponent = await crypto.randomBytes(16).toString("hex");
 
   // Include the random component in the refresh token payload
   const refreshTokenPayload = {
@@ -150,11 +152,9 @@ async function createRefreshTokenWithJwtid(token) {
     { jti: token.jti },
     { $push: { refreshToken } }
   );
-
+console.log(refreshToken)
   return refreshToken;
 }
-
-
 
 function generateJti() {
   return uuidv4();
@@ -170,48 +170,51 @@ router.post("/refresh-token", async (req, res) => {
 
   try {
     // Verify and decode the refresh token
-    const decodedToken = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, {
-      ignoreExpiration: true, // Allow expired tokens for revocation check
-    });
+    const decodedToken = await jwt.verify(
+      refreshToken,
+      process.env.REFRESH_TOKEN_SECRET,
+      {
+        ignoreExpiration: true, // Allow expired tokens for revocation check
+      }
+    );
 
     // Check if the refresh token is revoked
     const tokenRevoked = await isRefreshTokenRevoked(decodedToken.jwtid);
 
     if (tokenRevoked) {
-      return sendResponse(res, 400, "Refresh token has been revoked.");
+      return sendResponse(res, 401, "Refresh token has been revoked.");
     }
 
-      
     // Generate a new access token
     const accessToken = await createAccessToken(decodedToken);
 
+    const mostRecentToken = await findMostRecentRefreshTokenByJWTID(
+      decodedToken.jti
+    );
+    console.log("---------------------------------------");
+    console.log(mostRecentToken);
+    console.log("---------------------------------------");
+    console.log(refreshToken);
+    console.log("---------------------------------------");
 
-      const mostRecentToken = await findMostRecentRefreshTokenByJWTID(decodedToken.jti);
-console.log("---------------------------------------")
-      console.log(mostRecentToken)
-      console.log("---------------------------------------")
-      console.log(refreshToken)
-      console.log("---------------------------------------")
-      
-    console.log(mostRecentToken === refreshToken)
-      if (mostRecentToken != refreshToken) {
-        return sendResponse(res, 401, "Refresh token has been compromised.");
-      }
+    console.log(mostRecentToken === refreshToken);
+    if (mostRecentToken != refreshToken) {
+      await revokeTokenFamily(decodedToken.jti)
+      return sendResponse(res, 401, "Refresh token has been compromised.");
+    }
 
-      // Generate a new refresh token and update the corresponding entry in the database
-      const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
+    // Generate a new refresh token and update the corresponding entry in the database
+    const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
 
-      await updateRefreshToken(decodedToken.jti, newRefreshToken);
-
-
-
-      // Set the new refresh token in the response cookie
-      res.cookie("refreshToken", newRefreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-      });
+    await updateRefreshToken(decodedToken.jti, newRefreshToken);
     
+
+    // Set the new refresh token in the response cookie
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+    });
 
     // Send the response with the new access token
     sendResponse(res, 200, "Token refreshed successfully.", {
@@ -223,19 +226,18 @@ console.log("---------------------------------------")
   }
 });
 
-
 async function isRefreshTokenRevoked(jwtid) {
   // Check if the refresh token (identified by jti) exists in the database
-  const refreshToken = await RefreshTokens.findOne({ jwtid });
+  const refreshToken = await RefreshTokens.findOne({ jti: jwtid });
+  console.log("is revoked " + refreshToken)
   if (refreshToken) {
+    console.log("is revoked " + refreshToken.revoked)
     return refreshToken.revoked;
   }
   return false;
 }
 
-
 async function updateRefreshToken(jwtid, newRefreshToken) {
-  console.log(jwtid, newRefreshToken)
   try {
     // Find the refresh token by its jwtid and push the new refresh token to the refreshToken array
     await RefreshTokens.findOneAndUpdate(
@@ -244,28 +246,38 @@ async function updateRefreshToken(jwtid, newRefreshToken) {
     );
   } catch (err) {
     // Handle any errors that occur during the database update
-    console.log(err)
+    console.log(err);
   }
 }
 
 async function findMostRecentRefreshTokenByJWTID(jwtid) {
-  // Query the database to find the document containing the most recent refresh token
-  const refreshTokenDoc = await RefreshTokens.findOne({ jwtid })
-    .sort({ createdAt: -1 })
-    .exec();
-
-  // If the document exists and has a non-empty refreshToken array, return the most recent token
-  if (refreshTokenDoc && refreshTokenDoc.refreshToken.length > 0) {
-    const mostRecentToken = refreshTokenDoc.refreshToken[0];
-    return mostRecentToken;
+  try {
+    const doc = await RefreshTokens.findOne({jwtid:jwtid}, { refreshToken: { $slice: -1 } }).exec();
+    if (doc && doc.refreshToken && doc.refreshToken.length > 0) {
+      const lastRefreshToken = doc.refreshToken[0];
+      console.log("this should be the last refresh token : " + lastRefreshToken)
+      return lastRefreshToken;
+    }
+  } catch (err) {
+    // Handle the error
+    console.error(err);
   }
-
-  return null; // Return null if no matching document or empty refreshToken array
+  return null
+  
 }
 
 
-
-
+async function revokeTokenFamily(jwtid) {
+  try {
+    const doc = await RefreshTokens.findOne({ jwtid: jwtid });
+    if (doc) {
+      await RefreshTokens.updateOne({ jwtid: jwtid }, { revoked: true });
+    }
+  } catch (err) {
+    // Handle any errors that occur during the update
+    console.error(err);
+  }
+}
 
 
 module.exports = router;

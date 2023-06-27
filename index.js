@@ -30,9 +30,10 @@ app.use('/api/Authenticate',authRoute)
 app.use('/api/Employees',employeesRoute)
 app.use('/api/skills',skillRoute)
 try {
-  mongoose.connect("mongodb://127.0.0.1:27017/listingsDB", {
+  mongoose.connect("mongodb+srv://omaralshuaili:rNeN5jF0fQ1mjSn1@cluster0.nlv5nkv.mongodb.net/?retryWrites=true&w=majority", {
     useNewUrlParser: true,
     useUnifiedTopology: true,
+    connectTimeoutMS: 30000,
   });
 
   const db = mongoose.connection;
