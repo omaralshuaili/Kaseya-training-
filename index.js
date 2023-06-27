@@ -49,7 +49,7 @@ const serverOptions = {
   key: fs.readFileSync("ssl/local.key"),
   cert: fs.readFileSync("ssl/local.cert"),
 };
-const port =  1337;
+const port =  3000;
 
 https
   .createServer(serverOptions, app)
