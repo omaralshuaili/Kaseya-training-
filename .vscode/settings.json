@@ -1,0 +1,8 @@
+{
+    "appService.zipIgnorePattern": [
+        "node_modules{,/**}",
+        ".vscode{,/**}"
+    ],
+    "appService.defaultWebAppToDeploy": "/subscriptions/d0603139-1748-4129-b2ac-0eebfc8ea447/resourceGroups/node-rg/providers/Microsoft.Web/sites/kaseya-training-omar",
+    "appService.deploySubpath": "."
+}
