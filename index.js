@@ -49,11 +49,11 @@ const serverOptions = {
   key: fs.readFileSync("ssl/local.key"),
   cert: fs.readFileSync("ssl/local.cert"),
 };
-const port =  8080;
+const port = process.env.port || 8080;
 
 https
   .createServer(serverOptions, app)
-  .listen(port, () => console.log(`listening on ...`));
+  .listen(port, () => console.log(`listening on ${port}`));
 
 
   app.get('/', (req, res) => {
