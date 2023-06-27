@@ -12,8 +12,9 @@ const { RefreshTokens } = require("../models/refreshTokenModel");
 const { v4: uuidv4 } = require("uuid");
 
 router.post("/login", async (req, res) => {
+  console.log(req.body)
   try {
-    if (!req.body.Username || !req.body.Password) {
+    if (!req.body.Username || !req.body.Password || !req.body) {
       return sendResponse(res, 400, "Please fill in all the fields.");
     }
 
@@ -22,7 +23,7 @@ router.post("/login", async (req, res) => {
       return sendResponse(res, 400, error.details[0].message);
     }
 
-    const user = await Users.findOne({ userName: req.body.userName });
+    const user = await Users.findOne({ Username: req.body.Username });
     if (!user) {
       return sendResponse(res, 400, "Invalid email or password.");
     }
@@ -53,8 +54,8 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error(err);
-    sendResponse(res, 500, "Server Error");
+    console.log(err);
+    sendResponse(res, 500, err);
   }
 });
 
@@ -62,11 +63,12 @@ router.post("/register", async (req, res) => {
   try {
     // Validation before adding users
     const { error } = validateUser(req.body);
-    if (error) return sendResponse(res, 401, error.details[0].message);
+    if (error) return sendResponse(res, 400, error.details[0].message);
 
     // Check if email already exists
     const userNameExists = await Users.findOne({ Username: req.body.Username });
-    if (userNameExists) return sendResponse(res, 401, "Email already exists.");
+    console.log(userNameExists)
+    if (userNameExists) return sendResponse(res, 400, "Email already exists.");
 
     // Hash the password
     const salt = await bcrypt.genSalt(10);
@@ -82,15 +84,15 @@ router.post("/register", async (req, res) => {
     await user.save();
     sendResponse(res, 201, "Thanks for registering with us.");
   } catch (err) {
-    console.error(err);
-    sendResponse(res, 500, "Server Error");
+    console.log(err);
+    sendResponse(res, 500, err);
   }
 });
 
 function createAccessToken(user) {
   const payload = {
     _id: user._id,
-    userName: user.userName,
+    userName: user.Username,
   };
 
   const options = {
@@ -105,7 +107,7 @@ function createAccessToken(user) {
 async function createRefreshToken(user) {
   const payload = {
     _id: user._id,
-    userName: user.userName,
+    userName: user.Username,
   };
 
   const options = {
@@ -134,7 +136,7 @@ async function createRefreshTokenWithJwtid(token) {
   const secret = process.env.REFRESH_TOKEN_SECRET;
 
   // Generate a random component for the refresh token
-  const randomComponent = crypto.randomBytes(16).toString("hex");
+  const randomComponent = await crypto.randomBytes(16).toString("hex");
 
   // Include the random component in the refresh token payload
   const refreshTokenPayload = {
@@ -150,7 +152,7 @@ async function createRefreshTokenWithJwtid(token) {
     { jti: token.jti },
     { $push: { refreshToken } }
   );
-
+console.log(refreshToken)
   return refreshToken;
 }
 
@@ -168,7 +170,7 @@ router.post("/refresh-token", async (req, res) => {
 
   try {
     // Verify and decode the refresh token
-    const decodedToken = jwt.verify(
+    const decodedToken = await jwt.verify(
       refreshToken,
       process.env.REFRESH_TOKEN_SECRET,
       {
@@ -180,7 +182,7 @@ router.post("/refresh-token", async (req, res) => {
     const tokenRevoked = await isRefreshTokenRevoked(decodedToken.jwtid);
 
     if (tokenRevoked) {
-      return sendResponse(res, 400, "Refresh token has been revoked.");
+      return sendResponse(res, 401, "Refresh token has been revoked.");
     }
 
     // Generate a new access token
@@ -197,6 +199,7 @@ router.post("/refresh-token", async (req, res) => {
 
     console.log(mostRecentToken === refreshToken);
     if (mostRecentToken != refreshToken) {
+      await revokeTokenFamily(decodedToken.jti)
       return sendResponse(res, 401, "Refresh token has been compromised.");
     }
 
@@ -204,6 +207,7 @@ router.post("/refresh-token", async (req, res) => {
     const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
 
     await updateRefreshToken(decodedToken.jti, newRefreshToken);
+    
 
     // Set the new refresh token in the response cookie
     res.cookie("refreshToken", newRefreshToken, {
@@ -224,7 +228,7 @@ router.post("/refresh-token", async (req, res) => {
 
 async function isRefreshTokenRevoked(jwtid) {
   // Check if the refresh token (identified by jti) exists in the database
-  const refreshToken = await RefreshTokens.findOne({ jwtid: jwtid });
+  const refreshToken = await RefreshTokens.findOne({ jti: jwtid });
   console.log("is revoked " + refreshToken)
   if (refreshToken) {
     console.log("is revoked " + refreshToken.revoked)
@@ -234,7 +238,6 @@ async function isRefreshTokenRevoked(jwtid) {
 }
 
 async function updateRefreshToken(jwtid, newRefreshToken) {
-  console.log(jwtid);
   try {
     // Find the refresh token by its jwtid and push the new refresh token to the refreshToken array
     await RefreshTokens.findOneAndUpdate(
@@ -247,9 +250,9 @@ async function updateRefreshToken(jwtid, newRefreshToken) {
   }
 }
 
-async function findMostRecentRefreshTokenByJWTID() {
+async function findMostRecentRefreshTokenByJWTID(jwtid) {
   try {
-    const doc = await RefreshTokens.findOne({}, { refreshToken: { $slice: -1 } }).exec();
+    const doc = await RefreshTokens.findOne({jwtid:jwtid}, { refreshToken: { $slice: -1 } }).exec();
     if (doc && doc.refreshToken && doc.refreshToken.length > 0) {
       const lastRefreshToken = doc.refreshToken[0];
       console.log("this should be the last refresh token : " + lastRefreshToken)
@@ -262,5 +265,19 @@ async function findMostRecentRefreshTokenByJWTID() {
   return null
   
 }
+
+
+async function revokeTokenFamily(jwtid) {
+  try {
+    const doc = await RefreshTokens.findOne({ jwtid: jwtid });
+    if (doc) {
+      await RefreshTokens.updateOne({ jwtid: jwtid }, { revoked: true });
+    }
+  } catch (err) {
+    // Handle any errors that occur during the update
+    console.error(err);
+  }
+}
+
 
 module.exports = router;
