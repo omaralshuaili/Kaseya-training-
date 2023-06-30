@@ -12,6 +12,14 @@ const userSchema = new mongoose.Schema({
     dateCreated: {
         type:Date,
         default:Date.now
+    },
+    attempts:{
+        type:Number,
+        default:0
+    },
+    locked:{
+        type:Boolean,
+        default:false
     }
 })
 
