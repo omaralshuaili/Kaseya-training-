@@ -12,7 +12,6 @@ const { RefreshTokens } = require("../models/refreshTokenModel");
 const { v4: uuidv4 } = require("uuid");
 
 router.post("/login", async (req, res) => {
-  console.log(req.body)
   try {
     if (!req.body.Username || !req.body.Password || !req.body) {
       return sendResponse(res, 400, "Please fill in all the fields.");
@@ -29,7 +28,18 @@ router.post("/login", async (req, res) => {
     }
 
     const validPass = await bcrypt.compare(req.body.Password, user.Password);
+
+    if (user.attempts > 10) {
+      await lockUser(user);
+      return sendResponse(
+        res,
+        400,
+        "Too many attempts. Please try again later!"
+      );
+    }
+
     if (!validPass) {
+      await increaseAttempts(user);
       return sendResponse(res, 400, "Invalid email or password.");
     }
 
@@ -67,7 +77,7 @@ router.post("/register", async (req, res) => {
 
     // Check if email already exists
     const userNameExists = await Users.findOne({ Username: req.body.Username });
-    console.log(userNameExists)
+    console.log(userNameExists);
     if (userNameExists) return sendResponse(res, 400, "Email already exists.");
 
     // Hash the password
@@ -89,6 +99,28 @@ router.post("/register", async (req, res) => {
   }
 });
 
+router.post("/logout", async (req, res) => {
+  try {
+    res.clearCookie("refreshToken");
+    sendResponse(res, 200, "Logged out successfully.");
+  } catch (err) {
+    console.log(err);
+    sendResponse(err, 500, "Internal Server Error.");
+  }
+});
+
+async function increaseAttempts(user) {
+  await Users.findOneAndUpdate(user._id, {
+    $inc: { attempts: 1 },
+  });
+}
+
+async function lockUser(user) {
+  await Users.findOneAndUpdate(user._id, {
+    $set: { locked: true },
+  });
+}
+
 function createAccessToken(user) {
   const payload = {
     _id: user._id,
@@ -96,7 +128,7 @@ function createAccessToken(user) {
   };
 
   const options = {
-    expiresIn: "5s",
+    expiresIn: "1h",
   };
 
   const secret = process.env.JWT_SECRET_KEY;
@@ -152,7 +184,7 @@ async function createRefreshTokenWithJwtid(token) {
     { jti: token.jti },
     { $push: { refreshToken } }
   );
-console.log(refreshToken)
+  console.log(refreshToken);
   return refreshToken;
 }
 
@@ -191,15 +223,11 @@ router.post("/refresh-token", async (req, res) => {
     const mostRecentToken = await findMostRecentRefreshTokenByJWTID(
       decodedToken.jti
     );
-    console.log("---------------------------------------");
-    console.log(mostRecentToken);
-    console.log("---------------------------------------");
-    console.log(refreshToken);
-    console.log("---------------------------------------");
+
 
     console.log(mostRecentToken === refreshToken);
     if (mostRecentToken != refreshToken) {
-      await revokeTokenFamily(decodedToken.jti)
+      await revokeTokenFamily(decodedToken.jti);
       return sendResponse(res, 401, "Refresh token has been compromised.");
     }
 
@@ -207,7 +235,6 @@ router.post("/refresh-token", async (req, res) => {
     const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
 
     await updateRefreshToken(decodedToken.jti, newRefreshToken);
-    
 
     // Set the new refresh token in the response cookie
     res.cookie("refreshToken", newRefreshToken, {
@@ -229,9 +256,9 @@ router.post("/refresh-token", async (req, res) => {
 async function isRefreshTokenRevoked(jwtid) {
   // Check if the refresh token (identified by jti) exists in the database
   const refreshToken = await RefreshTokens.findOne({ jti: jwtid });
-  console.log("is revoked " + refreshToken)
+  console.log("is revoked " + refreshToken);
   if (refreshToken) {
-    console.log("is revoked " + refreshToken.revoked)
+    console.log("is revoked " + refreshToken.revoked);
     return refreshToken.revoked;
   }
   return false;
@@ -252,20 +279,23 @@ async function updateRefreshToken(jwtid, newRefreshToken) {
 
 async function findMostRecentRefreshTokenByJWTID(jwtid) {
   try {
-    const doc = await RefreshTokens.findOne({jwtid:jwtid}, { refreshToken: { $slice: -1 } }).exec();
+    const doc = await RefreshTokens.findOne(
+      { jwtid: jwtid },
+      { refreshToken: { $slice: -1 } }
+    ).exec();
     if (doc && doc.refreshToken && doc.refreshToken.length > 0) {
       const lastRefreshToken = doc.refreshToken[0];
-      console.log("this should be the last refresh token : " + lastRefreshToken)
+      console.log(
+        "this should be the last refresh token : " + lastRefreshToken
+      );
       return lastRefreshToken;
     }
   } catch (err) {
     // Handle the error
     console.error(err);
   }
-  return null
-  
+  return null;
 }
-
 
 async function revokeTokenFamily(jwtid) {
   try {
@@ -278,6 +308,5 @@ async function revokeTokenFamily(jwtid) {
     console.error(err);
   }
 }
-
 
 module.exports = router;
