@@ -2,7 +2,6 @@ const express = require("express");
 const app = express();
 app.use(express.json());
 const cors = require("cors");
-const https = require("https");
 const mongoose = require("mongoose");
 const fs = require("fs");
 const cookieParser = require('cookie-parser')
@@ -21,7 +20,7 @@ const corsOptions = {
   credentials: true, // for cookies
 };
 
-// configure the middleware for parsing HTML requeest body
+// configure the middleware for parsing HTML request body
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); //Parse URL-encoded bodies
@@ -45,17 +44,10 @@ try {
   console.log(err);
 }
 
-const serverOptions = {
-  key: fs.readFileSync("ssl/local.key"),
-  cert: fs.readFileSync("ssl/local.cert"),
-};
-const port = process.env.port || 8080;
+const port = 8080;
 
-https
-  .createServer(serverOptions, app)
-  .listen(port, () => console.log(`listening on ${port}`));
+app.listen(port, '0.0.0.0', () => console.log(`listening on ${port}`));
 
-
-  app.get('/', (req, res) => {
-    res.send('Hello World!')
-  })
+app.get('/', (req, res) => {
+  res.send('Hello World!')
+});
