@@ -16,8 +16,8 @@ const request = supertest(app);
 process.env.JWT_SECRET_KEY = 'testKey';
 process.env.REFRESH_TOKEN_SECRET = 'testKey';
 
-describe("Router", async () => {
-  before(async function  () {
+describe("Router",  () => {
+  beforeEach(async function  () {
     try {
       await mongoose.connect("mongodb://127.0.0.1:27017/testDB", {
         useNewUrlParser: true,
@@ -28,9 +28,7 @@ describe("Router", async () => {
       console.error("Error connecting to test database:", err);
     }
 
-    mongoose.connection.collection("users").deleteMany({}, () => {
-      done();
-    });
+    mongoose.connection.collection("users").deleteMany({})
 
     // Create a mock user
     const mockUser = new Users({
@@ -120,6 +118,7 @@ describe("Router", async () => {
         });
     });
   });
+
   describe("POST /refresh-token", () => {
     it("should return a 401 error if refresh token is not found in the request cookies", (done) => {
       request
@@ -127,7 +126,6 @@ describe("Router", async () => {
         .expect(401)
         .end((err, res) => {
           if (err) {
-            console.log(err)
             return done(err);
           }
           expect(res.body.message).to.equal("Refresh token not found.");
@@ -147,7 +145,7 @@ describe("Router", async () => {
   
       request
         .post("/api/Authenticate/refresh-token")
-        .set("Cookie", `refreshToken=${revokedToken}`)
+        .set("set-cookie", "refreshToken=qq")
         .expect(401)
         .end((err, res) => {
           if (err) {
@@ -225,7 +223,7 @@ describe("Router", async () => {
   
   
 
-  after(async () => {
+  afterEach(async () => {
     await mongoose.connection.close();
     console.log("Test database connection closed");
   });

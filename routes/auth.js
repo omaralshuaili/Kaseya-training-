@@ -10,6 +10,10 @@ const { validateUser } = require("../helpers/validations");
 const { Users } = require("../models/userModel");
 const { RefreshTokens } = require("../models/refreshTokenModel");
 const { v4: uuidv4 } = require("uuid");
+const cookieParser = require('cookie-parser');
+
+
+// Brevo Email config 
 
 router.post("/login", async (req, res) => {
   try {
@@ -52,9 +56,11 @@ router.post("/login", async (req, res) => {
     // Set the refresh token in the response cookie
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      domain:"backend-omar-alshuaili-kaseya-training.azurewebsites.net",
+      secure: true,
+      sameSite: "none"
     });
+
 
     // Send the response with the access token
     sendResponse(res, 200, "Login successful", {
@@ -77,7 +83,6 @@ router.post("/register", async (req, res) => {
 
     // Check if email already exists
     const userNameExists = await Users.findOne({ Username: req.body.Username });
-    console.log(userNameExists);
     if (userNameExists) return sendResponse(res, 400, "Email already exists.");
 
     // Hash the password
@@ -128,7 +133,7 @@ function createAccessToken(user) {
   };
 
   const options = {
-    expiresIn: "1h",
+    expiresIn: "10s",
   };
 
   const secret = process.env.JWT_SECRET_KEY;
@@ -153,7 +158,6 @@ async function createRefreshToken(user) {
 
   // Save the refresh token to the database
   const refreshToken = jwt.sign(payload, secret, { ...options, jwtid: jwtid });
-  console.log("this is the 1st one :" + jwtid);
   // Update the refreshToken array of the user
   await RefreshTokens.findOneAndUpdate(
     { jwtid: jwtid },
@@ -163,6 +167,44 @@ async function createRefreshToken(user) {
 
   return refreshToken;
 }
+
+
+
+
+async function sendEmailVerfication(email){
+ // SendSmtpEmail | Values to send a transactional email
+
+sendSmtpEmail = {
+    to: [{
+        email: 'testmail@example.com',
+        name: 'John Doe'
+    }],
+    templateId: 59,
+    params: {
+        name: 'John',
+        surname: 'Doe'
+    },
+    headers: {
+        'X-Mailin-custom': 'custom_header_1:custom_value_1|custom_header_2:custom_value_2'
+    }
+};
+
+apiInstance.sendTransacEmail(sendSmtpEmail).then(function(data) {
+  console.log('API called successfully. Returned data: ' + data);
+}, function(error) {
+  console.error(error);
+});
+}
+
+
+
+
+
+
+
+
+
+
 
 async function createRefreshTokenWithJwtid(token) {
   const secret = process.env.REFRESH_TOKEN_SECRET;
@@ -194,11 +236,10 @@ function generateJti() {
 
 router.post("/refresh-token", async (req, res) => {
   // Get the refresh token from the request cookies
-  const refreshToken = req.cookies.refreshToken;
-
-  if (!refreshToken) {
+  if (!req.cookies.refreshToken) {
     return sendResponse(res, 401, "Refresh token not found.");
   }
+  let refreshToken = req.cookies.refreshToken
 
   try {
     // Verify and decode the refresh token
@@ -228,7 +269,7 @@ router.post("/refresh-token", async (req, res) => {
     console.log(mostRecentToken === refreshToken);
     if (mostRecentToken != refreshToken) {
       await revokeTokenFamily(decodedToken.jti);
-      return sendResponse(res, 401, "Refresh token has been compromised.");
+      return sendResponse(res, 401, refreshToken);
     }
 
     // Generate a new refresh token and update the corresponding entry in the database
@@ -239,8 +280,9 @@ router.post("/refresh-token", async (req, res) => {
     // Set the new refresh token in the response cookie
     res.cookie("refreshToken", newRefreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      domain:"backend-omar-alshuaili-kaseya-training.azurewebsites.net",
+      secure: true,
+      sameSite: "none"
     });
 
     // Send the response with the new access token
@@ -249,7 +291,7 @@ router.post("/refresh-token", async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    sendResponse(res, 401, "Invalid refresh token.");
+    sendResponse(res, 401, err);
   }
 });
 
@@ -308,5 +350,8 @@ async function revokeTokenFamily(jwtid) {
     console.error(err);
   }
 }
+
+
+
 
 module.exports = router;
