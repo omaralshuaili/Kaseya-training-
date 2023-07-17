@@ -20,6 +20,13 @@ const userSchema = new mongoose.Schema({
     locked:{
         type:Boolean,
         default:false
+    },
+    emailToken:{
+        type:String
+    },
+    isVerified:{
+        type:Boolean,
+        default:false
     }
 })
 

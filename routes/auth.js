@@ -2,20 +2,25 @@ const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-require("dotenv").config();
 const crypto = require("crypto");
-
+const cookieParser = require("cookie-parser");
+const { createTransport } = require('nodemailer');
 const { sendResponse } = require("../helpers/responseHandler");
 const { validateUser } = require("../helpers/validations");
 const { Users } = require("../models/userModel");
 const { RefreshTokens } = require("../models/refreshTokenModel");
 const { v4: uuidv4 } = require("uuid");
-const cookieParser = require('cookie-parser');
+const moment = require('moment');
 
+require("dotenv").config();
 
-// Brevo Email config 
+router.post("/login", loginHandler);
+router.post("/register", registerHandler);
+router.post("/logout", logoutHandler);
+router.post("/refresh-token", refreshTokenHandler);
+router.post("/verify", verifyHandler)
 
-router.post("/login", async (req, res) => {
+async function loginHandler(req, res) {
   try {
     if (!req.body.Username || !req.body.Password || !req.body) {
       return sendResponse(res, 400, "Please fill in all the fields.");
@@ -27,6 +32,9 @@ router.post("/login", async (req, res) => {
     }
 
     const user = await Users.findOne({ Username: req.body.Username });
+
+    
+
     if (!user) {
       return sendResponse(res, 400, "Invalid email or password.");
     }
@@ -35,11 +43,7 @@ router.post("/login", async (req, res) => {
 
     if (user.attempts > 10) {
       await lockUser(user);
-      return sendResponse(
-        res,
-        400,
-        "Too many attempts. Please try again later!"
-      );
+      return sendResponse(res, 400, "Too many attempts. Please try again later!");
     }
 
     if (!validPass) {
@@ -47,22 +51,20 @@ router.post("/login", async (req, res) => {
       return sendResponse(res, 400, "Invalid email or password.");
     }
 
-    // Generate a new access token
-    const accessToken = await createAccessToken(user);
+    if(!user.verify){
+      return sendResponse(res,403, "Please verify your email!")
+    }
 
-    // Generate a new refresh token and store it in the database
+    const accessToken = await createAccessToken(user);
     const refreshToken = await createRefreshToken(user);
 
-    // Set the refresh token in the response cookie
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      domain:"backend-omar-alshuaili-kaseya-training.azurewebsites.net",
+      domain: "backend-omar-alshuaili-kaseya-training.azurewebsites.net",
       secure: true,
-      sameSite: "none"
+      sameSite: "none",
     });
 
-
-    // Send the response with the access token
     sendResponse(res, 200, "Login successful", {
       accessToken: accessToken,
       user: {
@@ -73,38 +75,61 @@ router.post("/login", async (req, res) => {
     console.log(err);
     sendResponse(res, 500, err);
   }
-});
+}
 
-router.post("/register", async (req, res) => {
+async function registerHandler(req, res) {
   try {
-    // Validation before adding users
     const { error } = validateUser(req.body);
     if (error) return sendResponse(res, 400, error.details[0].message);
 
-    // Check if email already exists
     const userNameExists = await Users.findOne({ Username: req.body.Username });
     if (userNameExists) return sendResponse(res, 400, "Email already exists.");
 
-    // Hash the password
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(req.body.Password, salt);
 
-    // Create new user
     const user = new Users({
       Username: req.body.Username,
       Password: hashedPassword,
     });
 
-    // Save the user to the database
     await user.save();
+    await sendEmailVerification(req.body.Username);
+
     sendResponse(res, 201, "Thanks for registering with us.");
   } catch (err) {
     console.log(err);
     sendResponse(res, 500, err);
   }
-});
+}
 
-router.post("/logout", async (req, res) => {
+async function verifyHandler(req,res){
+  try{
+    const email = req.body.email
+    const token = req.body.token
+    console.log(token)
+    console.log(email)
+
+    let user = await Users.findOne({Username:email})
+    console.log(user)
+    if(token != user.emailToken || !user.emailToken || user.isVerified || !user) {
+      return sendResponse(res,404,"Token is not valid !")
+    }
+
+    user.isVerified = true
+    user.emailToken = ""
+    await user.save()
+    sendResponse(res,200,"Email verified. You can log in now")
+
+  } catch (err) {
+    console.log(err);
+    sendResponse(res, 500, err);
+  }
+
+}
+
+async function logoutHandler(req, res) {
   try {
     res.clearCookie("refreshToken");
     sendResponse(res, 200, "Logged out successfully.");
@@ -112,11 +137,63 @@ router.post("/logout", async (req, res) => {
     console.log(err);
     sendResponse(err, 500, "Internal Server Error.");
   }
-});
+}
+
+async function refreshTokenHandler(req, res) {
+  if (!req.cookies.refreshToken) {
+    return sendResponse(res, 401, "Refresh token not found.");
+  }
+  let refreshToken = req.cookies.refreshToken;
+
+  try {
+    const decodedToken = await jwt.verify(
+      refreshToken,
+      process.env.REFRESH_TOKEN_SECRET,
+      {
+        ignoreExpiration: true,
+      }
+    );
+
+    const tokenRevoked = await isRefreshTokenRevoked(decodedToken.jwtid);
+
+    if (tokenRevoked) {
+      return sendResponse(res, 401, "Refresh token has been revoked.");
+    }
+
+    const accessToken = await createAccessToken(decodedToken);
+
+    const mostRecentToken = await findMostRecentRefreshTokenByJWTID(
+      decodedToken.jti
+    );
+
+    if (mostRecentToken != refreshToken) {
+      await revokeTokenFamily(decodedToken.jti);
+      return sendResponse(res, 401, refreshToken);
+    }
+
+    const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
+
+    await updateRefreshToken(decodedToken.jti, newRefreshToken);
+
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      domain: "backend-omar-alshuaili-kaseya-training.azurewebsites.net",
+      secure: true,
+      sameSite: "none",
+    });
+
+    sendResponse(res, 200, "Token refreshed successfully.", {
+      accessToken,
+    });
+  } catch (err) {
+    console.error(err);
+    sendResponse(res, 401, err);
+  }
+}
 
 async function increaseAttempts(user) {
   await Users.findOneAndUpdate(user._id, {
-    $inc: { attempts: 1 },
+      $inc: { attempts: 1 },
   });
 }
 
@@ -152,13 +229,9 @@ async function createRefreshToken(user) {
   };
 
   const secret = process.env.REFRESH_TOKEN_SECRET;
-
-  // Generate a unique identifier (jwtid) for the token
   const jwtid = await generateJti();
 
-  // Save the refresh token to the database
   const refreshToken = jwt.sign(payload, secret, { ...options, jwtid: jwtid });
-  // Update the refreshToken array of the user
   await RefreshTokens.findOneAndUpdate(
     { jwtid: jwtid },
     { $push: { refreshToken } },
@@ -168,60 +241,105 @@ async function createRefreshToken(user) {
   return refreshToken;
 }
 
+async function sendEmailVerification(email) {
+  const token = crypto.randomBytes(124).toString('hex');
 
-
-
-async function sendEmailVerfication(email){
- // SendSmtpEmail | Values to send a transactional email
-
-sendSmtpEmail = {
-    to: [{
-        email: 'testmail@example.com',
-        name: 'John Doe'
-    }],
-    templateId: 59,
-    params: {
-        name: 'John',
-        surname: 'Doe'
+  const transporter = createTransport({
+    host: "smtp-relay.sendinblue.com",
+    port: 587,
+    auth: {
+      user: process.env.EMAIL,
+      pass: process.env.PASSEMAIL,
     },
-    headers: {
-        'X-Mailin-custom': 'custom_header_1:custom_value_1|custom_header_2:custom_value_2'
+  });
+
+  const mailOptions = {
+    from: process.env.EMAIL,
+    to: email,
+    subject: `Thanks for joining us !`,
+    html: `<!doctype html>
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width" />
+          <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+          <title>Simple Transactional Email</title>
+          <style>
+            /* CSS styles here */
+          </style>
+        </head>
+        <body class="">
+          <table border="0" cellpadding="0" cellspacing="0" class="body">
+            <!-- Email content here -->
+            <tr>
+              <td> </td>
+              <td class="container">
+                <div class="content">
+                  <span class="preheader">Subscribe to Coloured.com.ng mailing list</span>
+                  <table class="main">
+                    <!-- START MAIN CONTENT AREA -->
+                    <tr>
+                      <td class="wrapper">
+                        <table border="0" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td>
+                              <h1>Confirm your email</h1>
+                              <h2>You are just one step away</h2>
+                              <table border="0" cellpadding="0" cellspacing="0" class="btn btn-primary">
+                                <tbody>
+                                  <tr>
+                                    <td align="left">
+                                      <table border="0" cellpadding="0" cellspacing="0">
+                                        <tbody>
+                                          <tr>
+                                            <td><a href="https://localhost:4200/?verify=${email}&token=${token}" target="_blank">Confirm Email</a></td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                              <p>If you received this email by mistake, simply delete it. You won't be subscribed if you don't click the confirmation link above.</p>
+                            </td>
+                          </tr>
+                        </table>93
+                      </td>
+                    </tr>
+                    <!-- END MAIN CONTENT AREA -->
+                  </table>
+                </div>
+              </td>
+              <td> </td>
+            </tr>
+            <!-- End of email content -->
+          </table>
+        </body>
+      </html>
+      `
+  };
+
+  transporter.sendMail(mailOptions, function(error, info) {
+    if (error) {
+      console.log(error);
+    } else {
+      console.log('Email sent: ' + info.response);
     }
-};
+  });
+  const user = await Users.findOneAndUpdate({ Username: email },{emailToken:token});
+  await user.save()
 
-apiInstance.sendTransacEmail(sendSmtpEmail).then(function(data) {
-  console.log('API called successfully. Returned data: ' + data);
-}, function(error) {
-  console.error(error);
-});
+  
+
 }
-
-
-
-
-
-
-
-
-
-
 
 async function createRefreshTokenWithJwtid(token) {
   const secret = process.env.REFRESH_TOKEN_SECRET;
-
-  // Generate a random component for the refresh token
   const randomComponent = await crypto.randomBytes(16).toString("hex");
-
-  // Include the random component in the refresh token payload
   const refreshTokenPayload = {
     ...token,
     random: randomComponent,
   };
-
-  // Save the refresh token to the database
   const refreshToken = jwt.sign(refreshTokenPayload, secret);
-
-  // Update the refreshToken array of the user
   await RefreshTokens.findOneAndUpdate(
     { jti: token.jti },
     { $push: { refreshToken } }
@@ -234,73 +352,9 @@ function generateJti() {
   return uuidv4();
 }
 
-router.post("/refresh-token", async (req, res) => {
-  // Get the refresh token from the request cookies
-  if (!req.cookies.refreshToken) {
-    return sendResponse(res, 401, "Refresh token not found.");
-  }
-  let refreshToken = req.cookies.refreshToken
-
-  try {
-    // Verify and decode the refresh token
-    const decodedToken = await jwt.verify(
-      refreshToken,
-      process.env.REFRESH_TOKEN_SECRET,
-      {
-        ignoreExpiration: true, // Allow expired tokens for revocation check
-      }
-    );
-
-    // Check if the refresh token is revoked
-    const tokenRevoked = await isRefreshTokenRevoked(decodedToken.jwtid);
-
-    if (tokenRevoked) {
-      return sendResponse(res, 401, "Refresh token has been revoked.");
-    }
-
-    // Generate a new access token
-    const accessToken = await createAccessToken(decodedToken);
-
-    const mostRecentToken = await findMostRecentRefreshTokenByJWTID(
-      decodedToken.jti
-    );
-
-
-    console.log(mostRecentToken === refreshToken);
-    if (mostRecentToken != refreshToken) {
-      await revokeTokenFamily(decodedToken.jti);
-      return sendResponse(res, 401, refreshToken);
-    }
-
-    // Generate a new refresh token and update the corresponding entry in the database
-    const newRefreshToken = await createRefreshTokenWithJwtid(decodedToken);
-
-    await updateRefreshToken(decodedToken.jti, newRefreshToken);
-
-    // Set the new refresh token in the response cookie
-    res.cookie("refreshToken", newRefreshToken, {
-      httpOnly: true,
-      domain:"backend-omar-alshuaili-kaseya-training.azurewebsites.net",
-      secure: true,
-      sameSite: "none"
-    });
-
-    // Send the response with the new access token
-    sendResponse(res, 200, "Token refreshed successfully.", {
-      accessToken,
-    });
-  } catch (err) {
-    console.error(err);
-    sendResponse(res, 401, err);
-  }
-});
-
 async function isRefreshTokenRevoked(jwtid) {
-  // Check if the refresh token (identified by jti) exists in the database
   const refreshToken = await RefreshTokens.findOne({ jti: jwtid });
-  console.log("is revoked " + refreshToken);
   if (refreshToken) {
-    console.log("is revoked " + refreshToken.revoked);
     return refreshToken.revoked;
   }
   return false;
@@ -308,13 +362,11 @@ async function isRefreshTokenRevoked(jwtid) {
 
 async function updateRefreshToken(jwtid, newRefreshToken) {
   try {
-    // Find the refresh token by its jwtid and push the new refresh token to the refreshToken array
     await RefreshTokens.findOneAndUpdate(
       { jwtid },
       { $push: { refreshToken: newRefreshToken } }
     );
   } catch (err) {
-    // Handle any errors that occur during the database update
     console.log(err);
   }
 }
@@ -327,13 +379,10 @@ async function findMostRecentRefreshTokenByJWTID(jwtid) {
     ).exec();
     if (doc && doc.refreshToken && doc.refreshToken.length > 0) {
       const lastRefreshToken = doc.refreshToken[0];
-      console.log(
-        "this should be the last refresh token : " + lastRefreshToken
-      );
+      console.log("this should be the last refresh token : " + lastRefreshToken);
       return lastRefreshToken;
     }
   } catch (err) {
-    // Handle the error
     console.error(err);
   }
   return null;
@@ -346,12 +395,8 @@ async function revokeTokenFamily(jwtid) {
       await RefreshTokens.updateOne({ jwtid: jwtid }, { revoked: true });
     }
   } catch (err) {
-    // Handle any errors that occur during the update
     console.error(err);
   }
 }
-
-
-
 
 module.exports = router;
